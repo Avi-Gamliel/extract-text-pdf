@@ -1,0 +1,210 @@
+import fitz
+
+def is_hebrew(val):
+    return any(u"\u0590" <= c <= u"\u05EA" for c in val)
+
+sepcial_char = [" ", ":", ")", "(", ""]
+
+def recognize_letters(image):
+    print("")
+
+def custom_sort(lines):
+    arr = []
+    for line in lines:
+        l_bbox = line["bbox"]
+        index = 0
+        if len(arr) == 0:
+            arr.append(line)
+        else:
+            for r in arr:
+                r_bbox = r["bbox"]
+                # if in the same line
+                if r_bbox[1] - 2 > l_bbox[1]:
+                    arr.append(line)
+                    break;
+
+                elif r_bbox[1] + 2 < l_bbox[1]:
+                    if index == len(arr) - 1:
+                        arr.insert(index, line)
+                        break;
+                    else:
+                        continue
+                elif r_bbox[1] - 2 < l_bbox[1] and l_bbox[1] <  r_bbox[1] + 2:
+                    # the same line
+                    # check x box
+                    if r_bbox[0] > l_bbox[0]:
+                        arr.insert(index, line)
+                        break;
+                    else:
+                        arr.append(line)
+                        break;
+
+                else:
+                    if index == len(arr) - 1:
+                        arr.append(line)
+                        break;
+                    else:
+                        continue
+                index +=1
+    return arr
+
+def order_string_bidi(line):
+    global last,prev,temp,count
+    prev=None
+    last = None
+    index = 0
+    temp =''
+    count = 0
+    temp_word = ''
+    final=[]
+
+    # fixed this sorted by sort y not decender bot decsender in distance
+    # and check the x position
+    sorted_array = sorted(line, key=lambda x: (-x["bbox"][1], x["bbox"][0]))
+
+    # Sort the pre-sorted array
+    sorted_array = sorted_array
+    for l in sorted_array:
+        if prev != None:
+            if prev["bidi_lvl"] == 0:
+                # check lrt rtl
+                count +=1
+            else:
+                count = 0
+            if prev["bidi_lvl"] == 0 and l["bidi_lvl"] == 0:
+                if prev["seqno"] != l["seqno"]:
+                    final.append(temp_word[::-1])
+                    temp_word = l["char"]
+                else:
+                    temp_word += l["char"]
+                    if index == len(line)-1:
+                        final.append(temp_word[::-1])
+            elif prev["bidi_lvl"] == 0 and l["bidi_lvl"] == 1:
+                final.append(temp_word[::-1])
+                temp_word=l["char"]
+            elif prev["bidi_lvl"] == 1 and l["bidi_lvl"] == 1:
+                temp_word += l["char"]
+                if index == len(line) - 1:
+                    final.append(temp_word)
+            elif prev["bidi_lvl"] == 1 and l["bidi_lvl"] == 0 :
+                final.append(temp_word)
+                temp_word = l["char"]
+            else:
+                print("special")
+            prev = l
+
+        else:
+            prev = l
+            temp_word = l["char"]
+
+        last = l
+        index +=1
+    return "".join(final)
+
+def extract_text_from_pdf(pdf_file):
+
+    global prev_line,left,right,prev_anchor_x,prev_anchor_y,char_arr,prev_char,prev_block_bidi_lvl,prev_anchor_y
+
+    prev_block_bidi_lvl = None
+    prev_anchor_y , prev_anchor_x = 0,0
+    prev_line = None
+    prev_char = None
+    pages=[]
+    pdf_document = fitz.open(pdf_file)
+
+    for page_number in range(len(pdf_document)):
+        page = pdf_document.load_page(page_number)
+        text_dict = page.get_texttrace()
+        line = []
+        paragraphs = []
+        paragraph = []
+        for block in text_dict:
+            block_seq = block["seqno"]
+            block_bidi_lvl = block["bidi_lvl"]
+
+            for span in block["chars"]:
+                char_utf = chr(span[0])
+                char_glyph = span[1]
+                char_origin = span[2]
+                char_bbox = span[3]
+
+
+
+                # handle here if dont found the letter
+                # ocr
+
+                a = block["ascender"]
+                d = block["descender"]
+                r = fitz.Rect(char_bbox)
+                o = fitz.Point(char_origin)  # its y-value is the baseline
+                r.y1 = o.y - block["size"] * d / (a - d)
+                r.y0 = r.y1 - block["size"]
+                # page.draw_rect((o.x,o.y - (r.y1 - r.y0),r.x1,o.y))
+
+                zoom_factor = 100 / 72.0  # Convert resolution from dpi to zoom factor
+                # Render the page
+                pix = page.get_pixmap()
+
+                # Crop the region around the letter
+                cropped_pix = pix.crop(char_bbox)
+
+                # Save the cropped region as an image
+                cropped_pix.writePNG('test.png')
+                # Save the cropped area as a PNG image
+                # cropped_pix.save("test.png")
+
+                # r now is a rectangle of height 'fontsize'
+                # to crop the char we need the real height of the char
+                # y1 = origin.y - height
+                # y2 = origin.y
+                # x1 = origin.x
+                # x2 = origin.x + width
+                # crop_image()
+                recognize_letters('')
+                new_obj = {"char":char_utf,"bidi_lvl":block_bidi_lvl,"seqno":block_seq,"bbox":char_bbox}
+
+                ## handle line
+                if len(line) == 0:
+                    line.append(new_obj)
+                else:
+                    if prev_char != None:
+                        if prev_char["bbox"][1] - 1.5 < char_bbox[1] and prev_char["bbox"][1] + 1.5  > char_bbox[1]:
+                            line.append(new_obj)
+                        elif char_bbox[1] -prev_anchor_y > 1.5 :
+                            if char_utf.strip() == "":
+                                continue
+                            if char_bbox[1] - prev_anchor_y > 4:
+                                str_word = order_string_bidi(line)
+                                paragraph.append(str_word)
+                                paragraphs.append(paragraph)
+                                line = [new_obj]
+                                paragraph = []
+                            else:
+                                str_word = order_string_bidi(line)
+                                paragraph.append(str_word)
+                                line = [new_obj]
+                        else:
+                            line.append(new_obj)
+                    else:
+                        line.append(new_obj)
+
+                ## update previus data
+                if new_obj["char"].strip() != "":
+                    prev_anchor_y = new_obj["bbox"][3]
+                prev_char = new_obj
+
+        pages.append(paragraphs)
+
+    with open('readme.txt', 'w', encoding='utf-8') as f:
+        for page in pages:
+            for pargraph in page:
+                for line in pargraph:
+                    # reverse each line
+                    f.write(" ".join(line.split())[::-1])  # Add a newline character
+                f.write('\n\n')  # Add a space line character
+    pdf_document.save('1.pdf')
+    pdf_document.close()
+
+
+pdf_file = "hebrew_2.pdf"
+extract_text_from_pdf(pdf_file)
